@@ -1,0 +1,10 @@
+streamlit
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
+openai
+faiss-cpu
+sentence-transformers
+langchain==0.1.14
