@@ -46,14 +46,14 @@ client = OpenAI(api_key=openai_key)
 # --- Run if CSV file is uploaded ---
 if uploaded_csv:
     df = pd.read_csv(uploaded_csv)
-    required_cols = ["TPS", "CPU_Cores", "Memory_GB", "ResponseTime_ms", "CPU_Load", "Memory_Load"]
+    required_cols = ["TPS", "CPU_Cores", "Memory_GB", "ResponseTime_sec", "CPU_Load", "Memory_Load"]
     if not all(col in df.columns for col in required_cols):
         st.error("Missing required columns.")
         st.stop()
 
     st.write("Sample Data:", df.head())
 
-    features = ["TPS", "CPU_Cores", "Memory_GB", "ResponseTime_ms"]
+    features = ["TPS", "CPU_Cores", "Memory_GB", "ResponseTime_sec"]
     target_cpu = "CPU_Load"
     target_mem = "Memory_Load"
 
@@ -73,32 +73,31 @@ if uploaded_csv:
     st.write(f"Model Accuracy: CPU R² = {cpu_r2:.2f}, Memory R² = {mem_r2:.2f}")
 
     # Prediction UI
-    tps = st.slider("Expected TPS", 10, 200, 40, 10)
-    cpu = st.slider("CPU Cores per Pod", 1, 4, 1)
-    mem = st.slider("Memory per Pod (GB)", 2, 8, 2)
-    response = st.slider("Target Response Time (seconds)", 1, 5, 2, 1)
-    response_ms = response * 1000  # Convert to ms for model
+    tps = st.slider("Expected TPS", 5, 100, 40, 5)
+    cpu = st.slider("CPU Cores per Pod", 1, 2, 1)
+    mem = st.slider("Memory per Pod (GB)", 1, 2, 1)
+    response = st.slider("Target Response Time (sec)", 1, 10, 3)
 
-    def predict_pods(tps, cpu, mem, response_ms, max_cpu=75, max_mem=75):
+    def predict_pods(tps, cpu, mem, response, max_cpu=75, max_mem=75):
         for pods in range(1, 50):
             avg_tps = tps / pods
-            sample = pd.DataFrame([[avg_tps, cpu, mem, response_ms]], columns=features)
+            sample = pd.DataFrame([[avg_tps, cpu, mem, response]], columns=features)
             cpu_pred = cpu_model.predict(sample)[0]
             mem_pred = mem_model.predict(sample)[0]
             if cpu_pred <= max_cpu and mem_pred <= max_mem:
                 return pods, cpu_pred, mem_pred, True
-        # Still return best-effort if not within limits
-        sample = pd.DataFrame([[tps / 1, cpu, mem, response_ms]], columns=features)
-        return 1, cpu_model.predict(sample)[0], mem_model.predict(sample)[0], False
+        return pods, cpu_pred, mem_pred, False
 
-    pods_needed, pred_cpu, pred_mem, is_recommended = predict_pods(tps, cpu, mem, response_ms)
+    pods_needed, pred_cpu, pred_mem, within_limits = predict_pods(tps, cpu, mem, response)
 
-    st.success(f"Estimated Pods Required: {pods_needed}")
+    st.write(f"### Estimated Pods Required: {pods_needed}")
     st.write(f"Estimated CPU Utilization: {pred_cpu:.2f}%")
     st.write(f"Estimated Memory Utilization: {pred_mem:.2f}%")
 
-    if not is_recommended:
-        st.warning("⚠️ This configuration exceeds resource limits. Not recommended for production use.")
+    if within_limits:
+        st.success("Configuration is within acceptable limits.")
+    else:
+        st.warning("⚠️ Not recommended for production — CPU or Memory exceeds threshold limits.")
 
     # --- GPT-4 + RAG Context ---
     user_question = st.text_input("Ask a performance-related question")
@@ -108,24 +107,27 @@ if uploaded_csv:
         else:
             context = "No vector database found. Only using GPT without retrieval context."
 
-        example_prompt = f"""
-You are a senior performance engineer.
-Based on the following LoadRunner sample data:
-
-{df.head(3).to_string(index=False)}
-
-Answer the user's query: "{user_question}"
-
-If applicable, identify a potential performance problem using this data, explain the root cause, and provide tuning or optimization suggestions. Also summarize insights using historical context below:
-
-{context}
-
-Respond professionally and clearly.
+        sample_data_row = df.iloc[0]  # simulate showing from first row
+        example_text = f"""
+Example data:
+TPS = {sample_data_row['TPS']}, CPU = {sample_data_row['CPU_Cores']}, Memory = {sample_data_row['Memory_GB']} GB, 
+Response Time = {sample_data_row['ResponseTime_sec']} sec, CPU_Load = {sample_data_row['CPU_Load']}%, Memory_Load = {sample_data_row['Memory_Load']}%
 """
 
+        full_prompt = f"""
+Context:
+{context}
+
+{example_text}
+
+Question:
+{user_question}
+
+Answer like a senior performance engineer with root cause + improvement steps.
+"""
         res = client.chat.completions.create(
             model="gpt-4",
-            messages=[{"role": "user", "content": example_prompt}],
+            messages=[{"role": "user", "content": full_prompt}],
             temperature=0.2
         )
         st.write("### AI Response:")
