@@ -1,5 +1,5 @@
 import os
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
 from langchain.document_loaders import TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import HuggingFaceEmbeddings
@@ -25,7 +25,7 @@ def create_faiss_index(chunks, save_path="vectorstore"):
         model_name="all-MiniLM-L6-v2",
         encode_kwargs={'device': 'cpu', 'normalize_embeddings': True}
     )
-    db = FAISS.from_documents(chunks, embeddings)
+    db = FAISS.from_documents(chunks, embedding=embeddings)
     db.save_local(save_path)
     return db
 
@@ -35,16 +35,9 @@ def load_faiss_index(path="vectorstore"):
         model_name="all-MiniLM-L6-v2",
         encode_kwargs={'device': 'cpu', 'normalize_embeddings': True}
     )
-    return FAISS.load_local(path, embeddings)
+    return FAISS.load_local(folder_path=path, embeddings=embeddings)
 
 # Retrieve context from FAISS based on a user query
 def retrieve_context(db, query, k=3):
     docs = db.similarity_search(query, k=k)
     return "\n".join([doc.page_content for doc in docs])
-
-# Optional: Run this file directly to build the vector store
-if __name__ == "__main__":
-    raw_docs = load_documents("knowledge_base")
-    chunks = split_into_chunks(raw_docs)
-    create_faiss_index(chunks)
-    print("✅ Vectorstore created successfully.")

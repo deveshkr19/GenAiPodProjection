@@ -1,0 +1,16 @@
+To reduce CPU usage in OpenShift pods:
+- Optimize Java GC tuning (e.g., G1GC).
+- Profile memory usage using JFR or heap dumps.
+- Identify hot methods using JProfiler.
+- Remove unnecessary background tasks.
+- Scale horizontally rather than vertically.
+
+To reduce memory usage:
+- Use caching libraries (e.g., Redis) efficiently.
+- Check for memory leaks in collections.
+- Reduce thread count if unnecessary.
+
+Response time tuning:
+- Use asynchronous APIs.
+- Offload slow DB operations.
+- Use connection pooling.
