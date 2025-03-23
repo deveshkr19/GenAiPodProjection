@@ -32,12 +32,15 @@ if kb_files:
             f.write(file.getbuffer())
     docs = load_documents("knowledge_base")
     chunks = split_into_chunks(docs)
+    st.success(f"{len(docs)} documents loaded and split into {len(chunks)} chunks for FAISS.")
     db = create_faiss_index(chunks)
 else:
     try:
         db = load_faiss_index()
+        st.info("Loaded existing FAISS vector store from disk.")
     except:
         db = None
+        st.warning("No existing FAISS index found. RAG will not work.")
 
 # --- OpenAI API ---
 openai_key = st.secrets["OPENAI_API_KEY"]
@@ -72,71 +75,67 @@ if uploaded_csv:
 
     st.write(f"Model Accuracy: CPU R² = {cpu_r2:.2f}, Memory R² = {mem_r2:.2f}")
 
-    # --- Prediction UI ---
-    tps = st.slider("Expected TPS", 5, 100, 10, 5)
-    cpu = st.slider("CPU Cores per Pod", 1, 4, 1)
-    mem = st.slider("Memory per Pod (GB)", 1, 8, 2)
-    response = st.slider("Target Response Time (sec)", 1, 10, 2)
+    # Prediction UI
+    tps = st.slider("Expected TPS", 1, 100, 5, 1)
+    cpu = st.slider("CPU Cores per Pod", 1, 2, 1)
+    mem = st.slider("Memory per Pod (GB)", 1, 4, 2)
+    response = st.slider("Target Response Time (sec)", 1, 10, 3)
 
     def predict_pods(tps, cpu, mem, response, max_cpu=75, max_mem=75):
         for pods in range(1, 50):
-            sample = pd.DataFrame([[tps, cpu, mem, response]], columns=features)
+            avg_tps = tps / pods
+            sample = pd.DataFrame([[avg_tps, cpu, mem, response]], columns=features)
             cpu_pred = cpu_model.predict(sample)[0]
             mem_pred = mem_model.predict(sample)[0]
+            if cpu_pred <= max_cpu and mem_pred <= max_mem:
+                return pods, cpu_pred, mem_pred, True
+        sample = pd.DataFrame([[tps, cpu, mem, response]], columns=features)
+        cpu_pred = cpu_model.predict(sample)[0]
+        mem_pred = mem_model.predict(sample)[0]
+        return pods, cpu_pred, mem_pred, False
 
-            # Adjust projected utilization for total pods
-            projected_cpu = cpu_pred / pods
-            projected_mem = mem_pred / pods
+    pods_needed, pred_cpu, pred_mem, within_limits = predict_pods(tps, cpu, mem, response)
 
-            if projected_cpu <= max_cpu and projected_mem <= max_mem:
-                return pods, projected_cpu, projected_mem, True
-
-        # Return with out-of-limit predictions
-        return pods, cpu_pred / pods, mem_pred / pods, False
-
-    pods_needed, pred_cpu, pred_mem, is_valid = predict_pods(tps, cpu, mem, response)
-
-    st.markdown("## Estimated Pods Required: **{}**".format(pods_needed))
+    st.write(f"### Estimated Pods Required: {pods_needed}")
     st.write(f"Estimated CPU Utilization: {pred_cpu:.2f}%")
     st.write(f"Estimated Memory Utilization: {pred_mem:.2f}%")
 
-    if is_valid:
-        st.success("Configuration is within acceptable limits.")
+    if within_limits:
+        st.success("✅ Configuration is within acceptable limits.")
     else:
-        st.warning("Configuration exceeds safe CPU/Memory thresholds. Not recommended for production.")
+        st.warning("⚠️ Configuration exceeds limits. Not recommended for production.")
 
     # --- GPT-4 + RAG Context ---
     user_question = st.text_input("Ask a performance-related question")
     if user_question:
         if db:
             context = retrieve_context(db, user_question)
+            st.subheader("📄 Retrieved Context from Knowledge Base:")
+            st.code(context)
         else:
             context = "No vector database found. Only using GPT without retrieval context."
 
-        sample_data = f"TPS={tps}, CPU={cpu}, Memory={mem}GB, ResponseTime={response}s, Predicted_CPU={pred_cpu:.2f}%, Predicted_Memory={pred_mem:.2f}%"
-
+        # Enhanced Prompt
         full_prompt = f"""
-Context:
+Performance Data Context:
+TPS: {tps}, CPU per pod: {cpu}, Memory per pod: {mem} GB, Response target: {response} sec
+Predicted CPU Load: {pred_cpu:.2f}%, Memory Load: {pred_mem:.2f}%
+
+Knowledge Base Context:
 {context}
 
-System Profile:
-{sample_data}
-
-User Question:
+User Query:
 {user_question}
 
-Answer as a senior performance engineer. If applicable, include:
-- Root cause hypothesis
-- Related patterns from historical data
-- Best practices to improve
+Answer in a detailed, example-based format as a senior performance engineer.
+Explain the root cause, potential risks, and provide technical recommendations.
 """
 
         res = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": full_prompt}],
-            temperature=0.3
+            temperature=0.2
         )
-
         st.write("### AI Response:")
         st.write(res.choices[0].message.content)
 
