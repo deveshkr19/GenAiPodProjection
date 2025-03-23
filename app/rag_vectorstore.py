@@ -21,10 +21,10 @@ def split_into_chunks(docs, chunk_size=500, chunk_overlap=50):
 
 # Create FAISS index and save it locally
 def create_faiss_index(chunks, save_path="vectorstore"):
-   embeddings = HuggingFaceEmbeddings(
-    model_name="all-MiniLM-L6-v2",
-    encode_kwargs={'device': 'cpu', 'normalize_embeddings': True}
-)
+    embeddings = HuggingFaceEmbeddings(
+        model_name="all-MiniLM-L6-v2",
+        encode_kwargs={'device': 'cpu', 'normalize_embeddings': True}
+    )
     db = FAISS.from_documents(chunks, embeddings)
     db.save_local(save_path)
     return db
@@ -32,9 +32,9 @@ def create_faiss_index(chunks, save_path="vectorstore"):
 # Load FAISS index from local directory
 def load_faiss_index(path="vectorstore"):
     embeddings = HuggingFaceEmbeddings(
-    model_name="all-MiniLM-L6-v2",
-    encode_kwargs={'device': 'cpu', 'normalize_embeddings': True}
-)
+        model_name="all-MiniLM-L6-v2",
+        encode_kwargs={'device': 'cpu', 'normalize_embeddings': True}
+    )
     return FAISS.load_local(path, embeddings)
 
 # Retrieve context from FAISS based on a user query
