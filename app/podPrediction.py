@@ -9,7 +9,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score
 from sklearn.ensemble import IsolationForest
 from openai import OpenAI
-from rag_vectorstore import load_documents, split_into_chunks, create_faiss_index, load_faiss_index, retrieve_context
+from rag_vectorstore import (
+    load_documents,
+    split_into_chunks,
+    create_faiss_index,
+    load_faiss_index,
+    retrieve_context,
+)
 
 # --- Streamlit Title & Intro ---
 st.title("Smart Performance Forecasting for OpenShift Pods")
@@ -23,8 +29,11 @@ uploaded_csv = st.file_uploader("Upload LoadRunner Performance Report", type=["c
 
 # --- Upload Optional Knowledge Base Documents ---
 st.subheader("Upload Knowledge Base Files (txt, csv, md)")
-kb_files = st.file_uploader("Upload documents to enhance GPT context", type=["txt", "csv", "md"], accept_multiple_files=True)
+kb_files = st.file_uploader(
+    "Upload documents to enhance GPT context", type=["txt", "csv", "md"], accept_multiple_files=True
+)
 
+# --- Load RAG Knowledge Base ---
 if kb_files:
     os.makedirs("knowledge_base", exist_ok=True)
     for file in kb_files:
@@ -43,7 +52,7 @@ else:
 openai_key = st.secrets["OPENAI_API_KEY"]
 client = OpenAI(api_key=openai_key)
 
-# --- Run if CSV file is uploaded ---
+# --- Main Logic ---
 if uploaded_csv:
     df = pd.read_csv(uploaded_csv)
     required_cols = ["TPS", "CPU_Cores", "Memory_GB", "ResponseTime_ms", "CPU_Load", "Memory_Load"]
@@ -72,7 +81,7 @@ if uploaded_csv:
 
     st.write(f"Model Accuracy: CPU R² = {cpu_r2:.2f}, Memory R² = {mem_r2:.2f}")
 
-    # Prediction UI
+    # --- Pod Prediction ---
     tps = st.slider("Expected TPS", 10, 200, 40, 10)
     cpu = st.slider("CPU Cores per Pod", 1, 4, 1)
     mem = st.slider("Memory per Pod (GB)", 2, 8, 2)
@@ -97,10 +106,14 @@ if uploaded_csv:
     else:
         st.warning("No configuration meets resource limits.")
 
-    # --- GPT-4 + RAG Context ---
+    # --- GPT-4 + RAG ---
     user_question = st.text_input("Ask a performance-related question")
-    if user_question and db:
-        context = retrieve_context(db, user_question)
+    if user_question:
+        if db:
+            context = retrieve_context(db, user_question)
+        else:
+            context = "No vector database found. Only using GPT without retrieval context."
+
         full_prompt = f"""
 Context:
 {context}
@@ -110,13 +123,19 @@ Question:
 
 Answer like a senior performance engineer.
 """
-        res = client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": full_prompt}],
-            temperature=0.2
-        )
-        st.write("### AI Response:")
-        st.write(res.choices[0].message.content)
+        try:
+            res = client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": full_prompt}],
+                temperature=0.2
+            )
+            st.write("### AI Response:")
+            st.write(res.choices[0].message.content)
+        except Exception as e:
+            st.error(f"OpenAI error: {e}")
 
 # Footer
-st.markdown("<br><br><p style='font-size:14px; text-align:center; color:gray;'>Developed by Devesh Kumar</p>", unsafe_allow_html=True)
+st.markdown(
+    "<br><br><p style='font-size:14px; text-align:center; color:gray;'>Developed by Devesh Kumar</p>",
+    unsafe_allow_html=True
+)
