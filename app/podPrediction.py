@@ -72,32 +72,38 @@ if uploaded_csv:
 
     st.write(f"Model Accuracy: CPU R² = {cpu_r2:.2f}, Memory R² = {mem_r2:.2f}")
 
-    # Prediction UI
-    tps = st.slider("Expected TPS", 5, 100, 40, 5)
-    cpu = st.slider("CPU Cores per Pod", 1, 2, 1)
-    mem = st.slider("Memory per Pod (GB)", 1, 2, 1)
-    response = st.slider("Target Response Time (sec)", 1, 10, 3)
+    # --- Prediction UI ---
+    tps = st.slider("Expected TPS", 5, 100, 10, 5)
+    cpu = st.slider("CPU Cores per Pod", 1, 4, 1)
+    mem = st.slider("Memory per Pod (GB)", 1, 8, 2)
+    response = st.slider("Target Response Time (sec)", 1, 10, 2)
 
     def predict_pods(tps, cpu, mem, response, max_cpu=75, max_mem=75):
         for pods in range(1, 50):
-            avg_tps = tps / pods
-            sample = pd.DataFrame([[avg_tps, cpu, mem, response]], columns=features)
+            sample = pd.DataFrame([[tps, cpu, mem, response]], columns=features)
             cpu_pred = cpu_model.predict(sample)[0]
             mem_pred = mem_model.predict(sample)[0]
-            if cpu_pred <= max_cpu and mem_pred <= max_mem:
-                return pods, cpu_pred, mem_pred, True
-        return pods, cpu_pred, mem_pred, False
 
-    pods_needed, pred_cpu, pred_mem, within_limits = predict_pods(tps, cpu, mem, response)
+            # Adjust projected utilization for total pods
+            projected_cpu = cpu_pred / pods
+            projected_mem = mem_pred / pods
 
-    st.write(f"### Estimated Pods Required: {pods_needed}")
+            if projected_cpu <= max_cpu and projected_mem <= max_mem:
+                return pods, projected_cpu, projected_mem, True
+
+        # Return with out-of-limit predictions
+        return pods, cpu_pred / pods, mem_pred / pods, False
+
+    pods_needed, pred_cpu, pred_mem, is_valid = predict_pods(tps, cpu, mem, response)
+
+    st.markdown("## Estimated Pods Required: **{}**".format(pods_needed))
     st.write(f"Estimated CPU Utilization: {pred_cpu:.2f}%")
     st.write(f"Estimated Memory Utilization: {pred_mem:.2f}%")
 
-    if within_limits:
+    if is_valid:
         st.success("Configuration is within acceptable limits.")
     else:
-        st.warning("⚠️ Not recommended for production — CPU or Memory exceeds threshold limits.")
+        st.warning("Configuration exceeds safe CPU/Memory thresholds. Not recommended for production.")
 
     # --- GPT-4 + RAG Context ---
     user_question = st.text_input("Ask a performance-related question")
@@ -107,29 +113,30 @@ if uploaded_csv:
         else:
             context = "No vector database found. Only using GPT without retrieval context."
 
-        sample_data_row = df.iloc[0]  # simulate showing from first row
-        example_text = f"""
-Example data:
-TPS = {sample_data_row['TPS']}, CPU = {sample_data_row['CPU_Cores']}, Memory = {sample_data_row['Memory_GB']} GB, 
-Response Time = {sample_data_row['ResponseTime_sec']} sec, CPU_Load = {sample_data_row['CPU_Load']}%, Memory_Load = {sample_data_row['Memory_Load']}%
-"""
+        sample_data = f"TPS={tps}, CPU={cpu}, Memory={mem}GB, ResponseTime={response}s, Predicted_CPU={pred_cpu:.2f}%, Predicted_Memory={pred_mem:.2f}%"
 
         full_prompt = f"""
 Context:
 {context}
 
-{example_text}
+System Profile:
+{sample_data}
 
-Question:
+User Question:
 {user_question}
 
-Answer like a senior performance engineer with root cause + improvement steps.
+Answer as a senior performance engineer. If applicable, include:
+- Root cause hypothesis
+- Related patterns from historical data
+- Best practices to improve
 """
+
         res = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": full_prompt}],
-            temperature=0.2
+            temperature=0.3
         )
+
         st.write("### AI Response:")
         st.write(res.choices[0].message.content)
 
