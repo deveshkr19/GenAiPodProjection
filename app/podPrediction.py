@@ -52,9 +52,16 @@ if uploaded_csv:
         # --- GPT-4 Question Box ---
         question = st.text_input("Ask a performance-related question")
         if question:
-            answer = handle_user_question(rag_db, question, df, config.OPENAI_API_KEY)
+            response, context_used = handle_user_question(rag_db, question, df, config.OPENAI_API_KEY)
+
             st.markdown("### AI Response:")
-            st.write(answer)
+            st.write(response)
+
+            if context_used:
+                with st.expander("🔍 Context Retrieved from RAG"):
+                    st.code(context_used, language="markdown")
+            else:
+                st.warning("⚠️ No context was retrieved. GPT used without RAG.")
 
 # --- Footer ---
 show_footer()
