@@ -83,8 +83,7 @@ if uploaded_csv:
 
     def predict_pods(tps, cpu, mem, response, max_cpu=75, max_mem=75):
         for pods in range(1, 50):
-            avg_tps = tps / pods
-            sample = pd.DataFrame([[avg_tps, cpu, mem, response]], columns=features)
+            sample = pd.DataFrame([[tps, cpu, mem, response]], columns=features)
             cpu_pred = cpu_model.predict(sample)[0]
             mem_pred = mem_model.predict(sample)[0]
             if cpu_pred <= max_cpu and mem_pred <= max_mem:
