@@ -1,10 +1,21 @@
+# Web UI
 streamlit
+
+# Data processing
 pandas
 numpy
+
+# ML model
 scikit-learn
-seaborn
+
+# Visualizations
 matplotlib
+seaborn
+
+# OpenAI access
 openai
+
+# RAG + Vector DB
 langchain==0.1.14
 sentence-transformers
 faiss-cpu

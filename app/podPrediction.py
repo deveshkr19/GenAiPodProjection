@@ -1,142 +1,60 @@
-import os
 import streamlit as st
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import r2_score
-from sklearn.ensemble import IsolationForest
-from openai import OpenAI
-from rag_vectorstore import load_documents, split_into_chunks, create_faiss_index, load_faiss_index, retrieve_context
+from utils.data_loader import load_performance_data
+from utils.model_training import train_models
+from utils.pod_estimator import predict_pods
+from utils.rag_handler import handle_knowledge_base, handle_user_question
+from utils.ui_components import render_sliders, display_results, show_footer
+from utils import config
 
-# --- Streamlit Title & Intro ---
+# --- App Title & Intro ---
 st.title("Smart Performance Forecasting for OpenShift Pods")
 st.write("""
-This application predicts the optimal number of pods required in OpenShift based on LoadRunner performance data. 
-It uses ML + RAG (Retrieval-Augmented Generation) to enrich GPT predictions with historical knowledge base content.
+This app forecasts the optimal number of pods required in OpenShift based on LoadRunner performance data.  
+It uses ML + RAG (Retrieval-Augmented Generation) to enhance GPT responses with contextual knowledge.
 """)
 
-# --- Upload LoadRunner CSV File ---
+# --- Upload Performance CSV ---
 uploaded_csv = st.file_uploader("Upload LoadRunner Performance Report", type=["csv"])
 
-# --- Upload Optional Knowledge Base Documents ---
-st.subheader("Upload Knowledge Base Files (txt, csv, md)")
-kb_files = st.file_uploader("Upload documents to enhance GPT context", type=["txt", "csv", "md"], accept_multiple_files=True)
+# --- Upload Knowledge Base Files ---
+kb_files = st.file_uploader("Upload Knowledge Base Files (txt, csv, md)", type=["txt", "csv", "md"], accept_multiple_files=True)
 
-if kb_files:
-    os.makedirs("knowledge_base", exist_ok=True)
-    for file in kb_files:
-        with open(os.path.join("knowledge_base", file.name), "wb") as f:
-            f.write(file.getbuffer())
-    docs = load_documents("knowledge_base")
-    chunks = split_into_chunks(docs)
-    st.success(f"{len(docs)} documents loaded and split into {len(chunks)} chunks for FAISS.")
-    db = create_faiss_index(chunks)
-else:
-    try:
-        db = load_faiss_index()
-        st.info("Loaded existing FAISS vector store from disk.")
-    except:
-        db = None
-        st.warning("No existing FAISS index found. RAG will not work.")
-
-# --- OpenAI API ---
-openai_key = st.secrets["OPENAI_API_KEY"]
-client = OpenAI(api_key=openai_key)
-
-# --- Run if CSV file is uploaded ---
+# --- CSV Handling ---
 if uploaded_csv:
-    df = pd.read_csv(uploaded_csv)
-    required_cols = ["TPS", "CPU_Cores", "Memory_GB", "ResponseTime_sec", "CPU_Load", "Memory_Load"]
-    if not all(col in df.columns for col in required_cols):
-        st.error("Missing required columns.")
-        st.stop()
+    df = load_performance_data(uploaded_csv)
+    if df is not None:
+        st.write("Sample Data Preview:", df.head())
 
-    st.write("Sample Data:", df.head())
+        # Train the regression models
+        cpu_model, mem_model, cpu_r2, mem_r2 = train_models(df)
+        st.write(f"Model Accuracy: CPU R² = {cpu_r2:.2f}, Memory R² = {mem_r2:.2f}")
 
-    features = ["TPS", "CPU_Cores", "Memory_GB", "ResponseTime_sec"]
-    target_cpu = "CPU_Load"
-    target_mem = "Memory_Load"
+        # User input sliders
+        tps, cpu, mem, resp = render_sliders()
 
-    X = df[features]
-    y_cpu = df[target_cpu]
-    y_mem = df[target_mem]
-
-    X_train, X_test, y_cpu_train, y_cpu_test = train_test_split(X, y_cpu, test_size=0.2, random_state=42)
-    _, _, y_mem_train, y_mem_test = train_test_split(X, y_mem, test_size=0.2, random_state=42)
-
-    cpu_model = LinearRegression().fit(X_train, y_cpu_train)
-    mem_model = LinearRegression().fit(X_train, y_mem_train)
-
-    cpu_r2 = r2_score(y_cpu_test, cpu_model.predict(X_test))
-    mem_r2 = r2_score(y_mem_test, mem_model.predict(X_test))
-
-    st.write(f"Model Accuracy: CPU R² = {cpu_r2:.2f}, Memory R² = {mem_r2:.2f}")
-
-    # Prediction UI
-    tps = st.slider("Expected TPS", 1, 100, 5, 1)
-    cpu = st.slider("CPU Cores per Pod", 1, 2, 1)
-    mem = st.slider("Memory per Pod (GB)", 1, 4, 2)
-    response = st.slider("Target Response Time (sec)", 1, 10, 3)
-
-    def predict_pods(tps, cpu, mem, response, max_cpu=75, max_mem=75):
-        for pods in range(1, 50):
-            sample = pd.DataFrame([[tps, cpu, mem, response]], columns=features)
-            cpu_pred = cpu_model.predict(sample)[0]
-            mem_pred = mem_model.predict(sample)[0]
-            if cpu_pred <= max_cpu and mem_pred <= max_mem:
-                return pods, cpu_pred, mem_pred, True
-        sample = pd.DataFrame([[tps, cpu, mem, response]], columns=features)
-        cpu_pred = cpu_model.predict(sample)[0]
-        mem_pred = mem_model.predict(sample)[0]
-        return pods, cpu_pred, mem_pred, False
-
-    pods_needed, pred_cpu, pred_mem, within_limits = predict_pods(tps, cpu, mem, response)
-
-    st.write(f"### Estimated Pods Required: {pods_needed}")
-    st.write(f"Estimated CPU Utilization: {pred_cpu:.2f}%")
-    st.write(f"Estimated Memory Utilization: {pred_mem:.2f}%")
-
-    if within_limits:
-        st.success("✅ Configuration is within acceptable limits.")
-    else:
-        st.warning("⚠️ Configuration exceeds limits. Not recommended for production.")
-
-    # --- GPT-4 + RAG Context ---
-    user_question = st.text_input("Ask a performance-related question")
-    if user_question:
-        if db:
-            context = retrieve_context(db, user_question)
-            st.subheader("📄 Retrieved Context from Knowledge Base:")
-            st.code(context)
-        else:
-            context = "No vector database found. Only using GPT without retrieval context."
-
-        # Enhanced Prompt
-        full_prompt = f"""
-Performance Data Context:
-TPS: {tps}, CPU per pod: {cpu}, Memory per pod: {mem} GB, Response target: {response} sec
-Predicted CPU Load: {pred_cpu:.2f}%, Memory Load: {pred_mem:.2f}%
-
-Knowledge Base Context:
-{context}
-
-User Query:
-{user_question}
-
-Answer in a detailed, example-based format as a senior performance engineer.
-Explain the root cause, potential risks, and provide technical recommendations.
-"""
-
-        res = client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": full_prompt}],
-            temperature=0.2
+        # Predict optimal pod count
+        pod_count, pred_cpu, pred_mem, status_msg = predict_pods(
+            tps, cpu, mem, resp, cpu_model, mem_model,
+            config.CPU_THRESHOLD, config.MEMORY_THRESHOLD
         )
-        st.write("### AI Response:")
-        st.write(res.choices[0].message.content)
+        display_results(pod_count, pred_cpu, pred_mem, status_msg)
 
-# Footer
-st.markdown("<br><br><p style='font-size:14px; text-align:center; color:gray;'>Developed by Devesh Kumar</p>", unsafe_allow_html=True)
+        # --- RAG Setup ---
+        if kb_files:
+            rag_db = handle_knowledge_base(kb_files, config.KB_FOLDER, config.FAISS_INDEX_PATH)
+        else:
+            try:
+                rag_db = handle_knowledge_base(None, config.KB_FOLDER, config.FAISS_INDEX_PATH)
+            except Exception:
+                rag_db = None
+                st.warning("⚠️ No existing FAISS index found. RAG will not work.")
+
+        # --- GPT-4 Question Box ---
+        question = st.text_input("Ask a performance-related question")
+        if question:
+            answer = handle_user_question(rag_db, question, df, config.OPENAI_API_KEY)
+            st.markdown("### AI Response:")
+            st.write(answer)
+
+# --- Footer ---
+show_footer()
